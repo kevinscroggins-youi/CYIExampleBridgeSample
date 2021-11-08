@@ -1,36 +1,105 @@
-#include "ExampleBridge_TizenNaCl.h"
+#include "ExampleBridge_Web.h"
 
 #include <logging/YiLogger.h>
 #include <platform/YiWebBridgeLocator.h>
+#include <platform/YiWebFileLoader.h>
+#include <utility/YiError.h>
 
-#define LOG_TAG "ExampleBridge"
+#include <chrono>
 
-static constexpr const char *JAVASCRIPT_FILE_LOADER_CLASS_NAME("ExampleBridge");
-static constexpr const char *JAVASCRIPT_FILE_LOADER_INSTANCE_ACCESSOR_NAME("getInstance");
-static constexpr uint64_t GET_IP_ADDRESS_RESPONSE_TIMEOUT_MS = 5000;
+#define LOG_TAG "ExampleBridgeWeb"
 
-static CYIWebMessagingBridge::FutureResponse CallStaticFunction(yi::rapidjson::Document &&message, const CYIString &functionName, yi::rapidjson::Value &&functionArgumentsValue, bool *pMessageSent)
+static constexpr const char *EXAMPLE_BRIDGE_CLASS_NAME = "ExampleBridge";
+static constexpr const char *EXAMPLE_BRIDGE_INSTANCE_ACCESSOR_NAME = "getInstance";
+static constexpr std::chrono::milliseconds GET_IP_ADDRESS_RESPONSE_TIMEOUT_MS(5000);
+
+CYIWebMessagingBridge *ExampleBridgeWeb::GetWebMessagingBridge() const
 {
-    return CYIWebBridgeLocator::GetWebMessagingBridge()->CallStaticFunctionWithArgs(std::move(message), JAVASCRIPT_FILE_LOADER_CLASS_NAME, functionName, std::move(functionArgumentsValue), pMessageSent);
+    CYIWebMessagingBridge *pWebMessagingBridge = CYIWebBridgeLocator::GetWebMessagingBridge();
+
+    if (!pWebMessagingBridge)
+    {
+        if (!m_pWebViewController)
+        {
+            YI_LOGI(LOG_TAG, "No required web view controller provided, creating instance.");
+
+            m_pWebViewController = std::move(CYIWebViewController::CreateIfSupported());
+
+            YI_ASSERT(m_pWebViewController, LOG_TAG, "Failed to create required web view controller.");
+        }
+
+        pWebMessagingBridge = CYIWebBridgeLocator::GetWebMessagingBridge(m_pWebViewController.get());
+    }
+
+    YI_ASSERT(pWebMessagingBridge, LOG_TAG, "Web messaging bridge is not available on this platform, or web view controller state has changed.");
+
+    return pWebMessagingBridge;
 }
 
-static CYIWebMessagingBridge::FutureResponse CallInstanceFunction(yi::rapidjson::Document &&message, const CYIString &functionName, yi::rapidjson::Value &&functionArgumentsValue, bool *pMessageSent)
+CYIWebFileLoader *ExampleBridgeWeb::GetFileLoader() const
 {
-    return CYIWebBridgeLocator::GetWebMessagingBridge()->CallInstanceFunctionWithArgs(std::move(message), JAVASCRIPT_FILE_LOADER_CLASS_NAME, JAVASCRIPT_FILE_LOADER_INSTANCE_ACCESSOR_NAME, functionName, std::move(functionArgumentsValue), yi::rapidjson::Value(yi::rapidjson::kArrayType), pMessageSent);
+    CYIWebFileLoader *pWebFileLoader = GetWebMessagingBridge()->GetFileLoader();
+
+    YI_ASSERT(pWebFileLoader, LOG_TAG, "Web file loader is not available on this platform, or web view controller state has changed.");
+
+    return pWebFileLoader;
 }
 
-static uint64_t RegisterEventHandler(const CYIString &eventName, CYIWebMessagingBridge::EventCallback &&eventCallback)
+CYIWebMessagingBridge::FutureResponse ExampleBridgeWeb::CallStaticFunction(yi::rapidjson::Document &&message, const CYIString &functionName, yi::rapidjson::Value &&functionArgumentsValue, bool *pMessageSent)
 {
-    return CYIWebBridgeLocator::GetWebMessagingBridge()->RegisterEventHandler(JAVASCRIPT_FILE_LOADER_CLASS_NAME, eventName, std::move(eventCallback));
+    return GetWebMessagingBridge()->CallStaticFunctionWithArgs(std::move(message), EXAMPLE_BRIDGE_CLASS_NAME, functionName, std::move(functionArgumentsValue), pMessageSent);
 }
 
-static void UnregisterEventHandler(uint64_t &eventHandlerId)
+CYIWebMessagingBridge::FutureResponse ExampleBridgeWeb::CallInstanceFunction(yi::rapidjson::Document &&message, const CYIString &functionName, yi::rapidjson::Value &&functionArgumentsValue, bool *pMessageSent)
 {
-    CYIWebBridgeLocator::GetWebMessagingBridge()->UnregisterEventHandler(eventHandlerId);
+    return GetWebMessagingBridge()->CallInstanceFunctionWithArgs(std::move(message), EXAMPLE_BRIDGE_CLASS_NAME, EXAMPLE_BRIDGE_INSTANCE_ACCESSOR_NAME, functionName, std::move(functionArgumentsValue), yi::rapidjson::Value(yi::rapidjson::kArrayType), pMessageSent);
+}
+
+uint64_t ExampleBridgeWeb::RegisterEventHandler(const CYIString &eventName, CYIWebMessagingBridge::EventCallback &&eventCallback)
+{
+    return GetWebMessagingBridge()->RegisterEventHandler(EXAMPLE_BRIDGE_CLASS_NAME, eventName, std::move(eventCallback));
+}
+
+void ExampleBridgeWeb::UnregisterEventHandler(uint64_t &eventHandlerId)
+{
+    GetWebMessagingBridge()->UnregisterEventHandler(eventHandlerId);
     eventHandlerId = 0;
 }
 
-ExampleBridge_TizenNaCl::ExampleBridge_TizenNaCl()
+bool ExampleBridgeWeb::LoadScript()
+{
+    static constexpr const char *SCRIPT_FILE_NAME = "ExampleBridge.js";
+
+    CYIWebFileLoader *pFileLoader = GetWebMessagingBridge()->GetFileLoader();
+
+    bool messageSent = false;
+    CYIWebMessagingBridge::FutureResponse futureResponse = pFileLoader->LoadFile(SCRIPT_FILE_NAME, &messageSent);
+
+    if (!messageSent)
+    {
+        YI_LOGE(LOG_TAG, "Failed to invoke web file loader load file function when attempting to load example bridge script.");
+        return false;
+    }
+
+    bool valueAssigned = false;
+    CYIWebMessagingBridge::Response response = futureResponse.Take(CYIWebMessagingBridge::DEFAULT_RESPONSE_TIMEOUT_MS, &valueAssigned);
+
+    if (!valueAssigned)
+    {
+        YI_LOGE(LOG_TAG, "Did not receive a response from the web messaging bridge when attempting to load example bridge script!");
+        return false;
+    }
+
+    if (response.HasError())
+    {
+        YI_LOGE(LOG_TAG, "%s", response.GetError()->GetStacktraceOrMessage().GetData());
+        return false;
+    }
+
+    return true;
+}
+
+ExampleBridgeWeb::ExampleBridgeWeb()
     : m_sequentialNumberEventHandlerId(0)
 {
     static constexpr const char *SEQUENTIAL_NUMBER_EVENT_NAME = "sequentialNumber";
@@ -45,11 +114,18 @@ ExampleBridge_TizenNaCl::ExampleBridge_TizenNaCl()
             YI_LOGE(LOG_TAG, "Invalid '%s' event data. JSON string for event: '%s'.", SEQUENTIAL_NUMBER_EVENT_NAME, CYIRapidJSONUtility::CreateStringFromValue(event).GetData());
         }
     });
+
+    if (!LoadScript())
+    {
+        YI_ASSERT(false, LOG_TAG, "Failed to load example bridge script!");
+    }
 }
 
-ExampleBridge_TizenNaCl::~ExampleBridge_TizenNaCl() = default;
+ExampleBridgeWeb::~ExampleBridgeWeb()
+{
+}
 
-void ExampleBridge_TizenNaCl::Init()
+void ExampleBridgeWeb::Init()
 {
     static constexpr const char *FUNCTION_NAME = "init";
 
@@ -76,7 +152,7 @@ void ExampleBridge_TizenNaCl::Init()
     }
 }
 
-CYIString ExampleBridge_TizenNaCl::GetNickname()
+CYIString ExampleBridgeWeb::GetNickname()
 {
     static constexpr const char *FUNCTION_NAME = "getNickname";
 
@@ -100,7 +176,8 @@ CYIString ExampleBridge_TizenNaCl::GetNickname()
         {
             YI_LOGE(LOG_TAG, "%s", response.GetError()->GetMessage().GetData());
         }
-        else {
+        else
+        {
             const yi::rapidjson::Value *pData = response.GetResult();
 
             if (!pData->IsString())
@@ -117,7 +194,7 @@ CYIString ExampleBridge_TizenNaCl::GetNickname()
     return CYIString();
 }
 
-bool ExampleBridge_TizenNaCl::SetNickname(const CYIString &nickname)
+bool ExampleBridgeWeb::SetNickname(const CYIString &nickname)
 {
     static constexpr const char *FUNCTION_NAME = "setNickname";
 
@@ -149,7 +226,8 @@ bool ExampleBridge_TizenNaCl::SetNickname(const CYIString &nickname)
         {
             YI_LOGE(LOG_TAG, "%s", response.GetError()->GetMessage().GetData());
         }
-        else {
+        else
+        {
             return true;
         }
     }
@@ -157,7 +235,7 @@ bool ExampleBridge_TizenNaCl::SetNickname(const CYIString &nickname)
     return false;
 }
 
-CYIString ExampleBridge_TizenNaCl::GetIPAddress()
+CYIString ExampleBridgeWeb::GetIPAddress()
 {
     static constexpr const char *FUNCTION_NAME = "getIPAddress";
 
@@ -171,7 +249,7 @@ CYIString ExampleBridge_TizenNaCl::GetIPAddress()
     else
     {
         bool valueAssigned = false;
-        CYIWebMessagingBridge::Response response = futureResponse.Take(GET_IP_ADDRESS_RESPONSE_TIMEOUT_MS, &valueAssigned);
+        CYIWebMessagingBridge::Response response = futureResponse.Take(GET_IP_ADDRESS_RESPONSE_TIMEOUT_MS.count(), &valueAssigned);
 
         if (!valueAssigned)
         {
@@ -181,7 +259,8 @@ CYIString ExampleBridge_TizenNaCl::GetIPAddress()
         {
             YI_LOGE(LOG_TAG, "%s", response.GetError()->GetMessage().GetData());
         }
-        else {
+        else
+        {
             const yi::rapidjson::Value *pData = response.GetResult();
 
             if (!pData->IsString())
@@ -198,7 +277,7 @@ CYIString ExampleBridge_TizenNaCl::GetIPAddress()
     return CYIString();
 }
 
-std::vector<CYIString> ExampleBridge_TizenNaCl::GetLoadedScripts()
+std::vector<CYIString> ExampleBridgeWeb::GetLoadedScripts()
 {
     static constexpr const char *FUNCTION_NAME = "getLoadedScripts";
 
@@ -234,9 +313,9 @@ std::vector<CYIString> ExampleBridge_TizenNaCl::GetLoadedScripts()
             }
             else
             {
-                for(uint32_t i = 0; i < pData->Size(); i++)
+                for (uint32_t i = 0; i < pData->Size(); i++)
                 {
-                    if((*pData)[i].IsString())
+                    if ((*pData)[i].IsString())
                     {
                         loadedScripts.emplace_back((*pData)[i].GetString());
                     }

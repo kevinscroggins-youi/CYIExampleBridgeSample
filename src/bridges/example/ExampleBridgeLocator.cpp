@@ -6,25 +6,25 @@
 
 #define LOG_TAG "ExampleBridgeLocator"
 
-#if defined(YI_TIZEN_NACL)
-#    include "ExampleBridge_TizenNaCl.h"
+#if defined(YI_TIZEN_NACL) || defined(YI_UWP)
+#    include "ExampleBridge_Web.h"
 #endif
 
-static std::shared_ptr<ExampleBridge> s_pCachedExampleBridge = nullptr;
+static std::unique_ptr<ExampleBridge> s_pCachedExampleBridge = nullptr;
 
-std::shared_ptr<ExampleBridge> ExampleBridgeLocator::GetExampleBridge()
+ExampleBridge *ExampleBridgeLocator::GetExampleBridge()
 {
     if (!s_pCachedExampleBridge)
     {
-#if defined(YI_TIZEN_NACL)
-        s_pCachedExampleBridge = std::make_shared<ExampleBridge_TizenNaCl>();
+#if defined(YI_TIZEN_NACL) || defined(YI_UWP)
+        s_pCachedExampleBridge = std::make_unique<ExampleBridgeWeb>();
 #endif
 
-        if(s_pCachedExampleBridge)
+        if (s_pCachedExampleBridge)
         {
             s_pCachedExampleBridge->Init();
         }
     }
 
-    return s_pCachedExampleBridge;
+    return s_pCachedExampleBridge.get();
 }

@@ -6,7 +6,7 @@
 class ExampleBridgeLocator
 {
 public:
-    static std::shared_ptr<ExampleBridge> GetExampleBridge();
+    static ExampleBridge *GetExampleBridge();
 };
 
 #endif // _EXAMPLE_BRIDGE_LOCATOR_H_
